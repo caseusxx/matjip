@@ -94,11 +94,22 @@ h1{font-size:24px;font-weight:600;margin-bottom:4px}
 .btn-save{background:#D85A30;color:#fff;border:none;border-radius:8px;padding:8px 18px;font-size:14px;cursor:pointer;font-weight:500}
 .btn-save:hover{background:#993C1D}
 .img-preview{width:100%;height:120px;object-fit:cover;border-radius:8px;margin-top:6px;display:none}
-.toast{position:fixed;bottom:1.5rem;right:1.5rem;background:#0F6E56;color:#E1F5EE;font-size:13px;padding:8px 16px;border-radius:8px;opacity:0;transition:opacity .3s;pointer-events:none;z-index:300}
+.toast{position:fixed;bottom:1.5rem;right:1.5rem;font-size:13px;padding:8px 16px;border-radius:8px;opacity:0;transition:opacity .3s;pointer-events:none;z-index:300}
 .toast.show{opacity:1}
+.toast.success{background:#0F6E56;color:#E1F5EE;}
+.toast.error{background:#c0392b;color:#fff;}
+.loading-overlay{position:fixed;inset:0;background:rgba(249,248,246,.85);z-index:400;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:12px;font-size:14px;color:#888}
+.spinner{width:32px;height:32px;border:3px solid #e0ddd8;border-top-color:#D85A30;border-radius:50%;animation:spin .7s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
 </style>
 </head>
 <body>
+
+<div class="loading-overlay" id="loadingOverlay">
+  <div class="spinner"></div>
+  <span>맛집 불러오는 중...</span>
+</div>
+
 <div class="page">
   <div class="top-bar">
     <div>
@@ -130,7 +141,7 @@ h1{font-size:24px;font-weight:600;margin-bottom:4px}
   <div class="filter-section">
     <div class="filter-row">
       <span class="filter-label">지역</span>
-      <div id="regionFilters" style="display:flex;flex-wrap:wrap;gap:6px"></div>
+      <div id="regionFilters" style="display:flex;flex-wrap:wrap;gap:6px;align-items:center"></div>
     </div>
     <div class="filter-row">
       <span class="filter-label">종류</span>
@@ -214,217 +225,252 @@ h1{font-size:24px;font-weight:600;margin-bottom:4px}
   </div>
 </div>
 
-<div class="toast" id="toast">저장됨</div>
+<div class="toast" id="toast"></div>
 
-<script>
-const REGION_GROUPS={
-  "서울":["강남/서초","홍대/마포","이태원/한남","을지로/종로","성수/왕십리","연남/연희"],
-  "경기":["판교","분당","서현","그 외 경기"]
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/12.15.0/firebase-app.js";
+import { getFirestore, collection, onSnapshot, addDoc, updateDoc, deleteDoc, doc } from "https://www.gstatic.com/firebasejs/12.15.0/firebase-firestore.js";
+
+const firebaseConfig = {
+  apiKey: "AIzaSyANSz9wmy03IoIY0XPUSa5JR0mTYqBnGpU",
+  authDomain: "matjip-81881.firebaseapp.com",
+  projectId: "matjip-81881",
+  storageBucket: "matjip-81881.firebasestorage.app",
+  messagingSenderId: "202209383054",
+  appId: "1:202209383054:web:bc1c6e7c5d268be4b8afdf",
+  measurementId: "G-DN8QTXCYKQ"
 };
-const REGIONS=Object.values(REGION_GROUPS).flat();
-const CATS=["한식","고기/구이","해산물","일식","중식","양식","카페/디저트","분식","술집/바"];
-const SK='food_guide_v2';
 
-let places=[], nextId=1;
-let selRegion='전체', selCat='전체', selVisit='전체', quickMode='all';
-let editId=null;
+const app = initializeApp(firebaseConfig);
+const db = getFirestore(app);
+const colRef = collection(db, "places");
 
-function load(){
-  try{
-    const raw=localStorage.getItem(SK);
-    if(raw){const d=JSON.parse(raw);places=d.places||[];nextId=d.nextId||(places.length+1);}
-  }catch(e){}
-  if(!places.length){
-    places=[
-      {id:1,name:"도산면옥",region:"강남/서초",cat:"한식",stars:5,visit:"다녀왔어요",fav:true,note:"평냉 원탑. 여름 필수 방문",link:"",img:""},
-      {id:2,name:"육전식당",region:"을지로/종로",cat:"고기/구이",stars:5,visit:"다녀왔어요",fav:true,note:"육전+막걸리 조합 미침. 웨이팅 필수",link:"",img:""},
-      {id:3,name:"오무라이스짱",region:"홍대/마포",cat:"양식",stars:4,visit:"가고 싶어요",fav:false,note:"오무라이스 종류가 엄청 많음",link:"",img:""},
-      {id:4,name:"성수연방 베이커리",region:"성수/왕십리",cat:"카페/디저트",stars:4,visit:"다녀왔어요",fav:false,note:"소금빵 맛있음. 오픈런 감수 각오",link:"",img:""},
-      {id:5,name:"판교 고기리막국수",region:"판교",cat:"한식",stars:5,visit:"가고 싶어요",fav:false,note:"들기름 막국수 실화임. 주말 웨이팅 2시간",link:"",img:""}
-    ];
-    nextId=6;
-  }
-  populateSelects();render();
+const REGION_GROUPS = {
+  "서울": ["강남/서초","홍대/마포","이태원/한남","을지로/종로","성수/왕십리","연남/연희"],
+  "경기": ["판교","분당","서현","그 외 경기"]
+};
+const REGIONS = Object.values(REGION_GROUPS).flat();
+const CATS = ["한식","고기/구이","해산물","일식","중식","양식","카페/디저트","분식","술집/바"];
+
+let places = [];
+let selRegion = '전체', selCat = '전체', selVisit = '전체', quickMode = 'all';
+let editId = null;
+
+// 전역 함수 등록
+window.openModal = openModal;
+window.closeModal = closeModal;
+window.overlayClick = overlayClick;
+window.saveEntry = saveEntry;
+window.previewImg = previewImg;
+window.setRegion = (r) => { selRegion = r; render(); };
+window.setCat = (c) => { selCat = c; render(); };
+window.setVisit = (v) => { selVisit = v; quickMode = 'all'; render(); };
+window.setQuick = (m) => { quickMode = m; if(m !== 'all') selVisit = '전체'; render(); };
+window.toggleFav = toggleFav;
+window.toggleVisit = toggleVisit;
+window.startEdit = startEdit;
+window.deleteEntry = deleteEntry;
+
+// Firestore 실시간 연동
+onSnapshot(colRef, (snapshot) => {
+  places = snapshot.docs.map(d => ({ firestoreId: d.id, ...d.data() }));
+  document.getElementById('loadingOverlay').style.display = 'none';
+  populateSelects();
+  render();
+});
+
+function showToast(msg, type='success') {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.className = `toast ${type} show`;
+  setTimeout(() => t.classList.remove('show'), 2000);
 }
 
-function persist(){
-  try{localStorage.setItem(SK,JSON.stringify({places,nextId}));}catch(e){}
-  const t=document.getElementById('toast');
-  t.classList.add('show');
-  setTimeout(()=>t.classList.remove('show'),1800);
-}
-
-function populateSelects(){
-  const regionOpts='<option value="">선택</option>'+
-    Object.entries(REGION_GROUPS).map(([group,regs])=>
-      `<optgroup label="${group}">${regs.map(r=>`<option value="${r}">${r}</option>`).join('')}</optgroup>`
+function populateSelects() {
+  const regionOpts = '<option value="">선택</option>' +
+    Object.entries(REGION_GROUPS).map(([group, regs]) =>
+      `<optgroup label="${group}">${regs.map(r => `<option value="${r}">${r}</option>`).join('')}</optgroup>`
     ).join('');
-  document.getElementById('fRegion').innerHTML=regionOpts;
-  document.getElementById('fCat').innerHTML='<option value="">선택</option>'+CATS.map(c=>`<option value="${c}">${c}</option>`).join('');
+  document.getElementById('fRegion').innerHTML = regionOpts;
+  document.getElementById('fCat').innerHTML = '<option value="">선택</option>' +
+    CATS.map(c => `<option value="${c}">${c}</option>`).join('');
 }
 
-function buildFilters(){
-  // 지역 — 전체 칩 + 그룹별 호버 드롭다운
-  const isGroupActive=(group)=>REGION_GROUPS[group].includes(selRegion);
-  const regionHTML=
-    `<span class="chip ${selRegion==='전체'?'active':''}" onclick="setRegion('전체')">전체</span>`+
-    Object.entries(REGION_GROUPS).map(([group,regs])=>`
+function buildFilters() {
+  const isGroupActive = (group) => REGION_GROUPS[group].includes(selRegion);
+  const regionHTML =
+    `<span class="chip ${selRegion === '전체' ? 'active' : ''}" onclick="setRegion('전체')">전체</span>` +
+    Object.entries(REGION_GROUPS).map(([group, regs]) => `
       <div class="region-dropdown">
-        <div class="region-group-btn ${isGroupActive(group)?'group-active':''}">
+        <div class="region-group-btn ${isGroupActive(group) ? 'group-active' : ''}">
           ${group} <span class="arrow">▾</span>
         </div>
         <div class="region-sub">
-          ${regs.map(r=>`<div class="region-sub-item ${selRegion===r?'active':''}" onclick="setRegion('${r}')">${r}</div>`).join('')}
+          ${regs.map(r => `<div class="region-sub-item ${selRegion === r ? 'active' : ''}" onclick="setRegion('${r}')">${r}</div>`).join('')}
         </div>
       </div>
     `).join('');
-  document.getElementById('regionFilters').innerHTML=regionHTML;
-  document.getElementById('catFilters').innerHTML=
-    ['전체',...CATS].map(c=>`<span class="chip ${selCat===c?'active':''}" onclick="setCat('${c}')">${c}</span>`).join('');
-  document.querySelectorAll('[data-v]').forEach(el=>{
-    el.classList.toggle('active',el.dataset.v===selVisit);
+  document.getElementById('regionFilters').innerHTML = regionHTML;
+  document.getElementById('catFilters').innerHTML =
+    ['전체', ...CATS].map(c => `<span class="chip ${selCat === c ? 'active' : ''}" onclick="setCat('${c}')">${c}</span>`).join('');
+  document.querySelectorAll('[data-v]').forEach(el => {
+    el.classList.toggle('active', el.dataset.v === selVisit);
   });
-  ['all','fav','visited','wish'].forEach(k=>{
-    document.getElementById('st-'+k).classList.toggle('active-stat',quickMode===k);
+  ['all','fav','visited','wish'].forEach(k => {
+    document.getElementById('st-' + k).classList.toggle('active-stat', quickMode === k);
   });
-  const fb=document.getElementById('favBanner');
-  fb.classList.toggle('show',quickMode==='fav');
+  document.getElementById('favBanner').classList.toggle('show', quickMode === 'fav');
 }
 
-function setRegion(r){selRegion=r;render()}
-function setCat(c){selCat=c;render()}
-function setVisit(v){selVisit=v;quickMode='all';render()}
-function setQuick(m){quickMode=m;if(m!=='all')selVisit='전체';render()}
-
-function starsHTML(n){
-  return Array.from({length:5},(_,i)=>`<span class="star${i<n?'':' off'}">★</span>`).join('');
+function starsHTML(n) {
+  return Array.from({length:5}, (_, i) => `<span class="star${i < n ? '' : ' off'}">★</span>`).join('');
 }
 
-function render(){
+function render() {
   buildFilters();
-  const q=document.getElementById('searchInput').value.toLowerCase();
-  const filtered=places.filter(p=>{
-    if(quickMode==='fav'&&!p.fav)return false;
-    if(quickMode==='visited'&&p.visit!=='다녀왔어요')return false;
-    if(quickMode==='wish'&&p.visit!=='가고 싶어요')return false;
-    if(selRegion!=='전체'&&p.region!==selRegion)return false;
-    if(selCat!=='전체'&&p.cat!==selCat)return false;
-    if(selVisit!=='전체'&&p.visit!==selVisit)return false;
-    if(q&&!p.name.toLowerCase().includes(q)&&!(p.note||'').toLowerCase().includes(q))return false;
+  const q = document.getElementById('searchInput').value.toLowerCase();
+  const filtered = places.filter(p => {
+    if (quickMode === 'fav' && !p.fav) return false;
+    if (quickMode === 'visited' && p.visit !== '다녀왔어요') return false;
+    if (quickMode === 'wish' && p.visit !== '가고 싶어요') return false;
+    if (selRegion !== '전체' && p.region !== selRegion) return false;
+    if (selCat !== '전체' && p.cat !== selCat) return false;
+    if (selVisit !== '전체' && p.visit !== selVisit) return false;
+    if (q && !p.name.toLowerCase().includes(q) && !(p.note||'').toLowerCase().includes(q)) return false;
     return true;
   });
 
-  document.getElementById('sTotal').textContent=places.length;
-  document.getElementById('sFav').textContent=places.filter(p=>p.fav).length;
-  document.getElementById('sVisited').textContent=places.filter(p=>p.visit==='다녀왔어요').length;
-  document.getElementById('sWish').textContent=places.filter(p=>p.visit==='가고 싶어요').length;
-  document.getElementById('countBar').textContent=`${filtered.length}곳 표시 중`;
+  document.getElementById('sTotal').textContent = places.length;
+  document.getElementById('sFav').textContent = places.filter(p => p.fav).length;
+  document.getElementById('sVisited').textContent = places.filter(p => p.visit === '다녀왔어요').length;
+  document.getElementById('sWish').textContent = places.filter(p => p.visit === '가고 싶어요').length;
+  document.getElementById('countBar').textContent = `${filtered.length}곳 표시 중`;
 
-  const el=document.getElementById('cards');
-  if(!filtered.length){
-    el.innerHTML='<div class="empty"><i class="ti ti-mood-sad"></i>조건에 맞는 맛집이 없어요</div>';
+  const el = document.getElementById('cards');
+  if (!filtered.length) {
+    el.innerHTML = '<div class="empty"><i class="ti ti-mood-sad"></i>조건에 맞는 맛집이 없어요</div>';
     return;
   }
 
-  const sorted=[...filtered].sort((a,b)=>(b.fav?1:0)-(a.fav?1:0));
-  el.innerHTML=sorted.map(p=>`
-    <div class="card ${p.fav?'faved':p.visit==='다녀왔어요'?'visited':''}">
+  const sorted = [...filtered].sort((a, b) => (b.fav ? 1 : 0) - (a.fav ? 1 : 0));
+  el.innerHTML = sorted.map(p => `
+    <div class="card ${p.fav ? 'faved' : p.visit === '다녀왔어요' ? 'visited' : ''}">
       ${p.img
-        ?`<img class="card-img" src="${p.img}" alt="${p.name}" onerror="this.style.display='none'">`
-        :`<div class="card-img-placeholder"><i class="ti ti-photo"></i></div>`}
+        ? `<img class="card-img" src="${p.img}" alt="${p.name}" onerror="this.style.display='none'">`
+        : `<div class="card-img-placeholder"><i class="ti ti-photo"></i></div>`}
       <div class="card-body">
         <div class="card-header">
           <div class="card-name">${p.name}</div>
           <div class="card-actions">
-            <button class="icon-btn ${p.fav?'fav-on':''}" onclick="toggleFav(${p.id})" title="찐맛집"><i class="ti ti-star"></i></button>
-            <button class="icon-btn ${p.visit==='다녀왔어요'?'visit-on':''}" onclick="toggleVisit(${p.id})" title="방문 체크"><i class="ti ti-${p.visit==='다녀왔어요'?'circle-check':'circle'}"></i></button>
-            <button class="icon-btn" onclick="startEdit(${p.id})" title="수정"><i class="ti ti-edit"></i></button>
-            <button class="icon-btn" onclick="deleteEntry(${p.id})" title="삭제"><i class="ti ti-trash"></i></button>
+            <button class="icon-btn ${p.fav ? 'fav-on' : ''}" onclick="toggleFav('${p.firestoreId}', ${p.fav})" title="찐맛집"><i class="ti ti-star"></i></button>
+            <button class="icon-btn ${p.visit === '다녀왔어요' ? 'visit-on' : ''}" onclick="toggleVisit('${p.firestoreId}', '${p.visit}')" title="방문 체크"><i class="ti ti-${p.visit === '다녀왔어요' ? 'circle-check' : 'circle'}"></i></button>
+            <button class="icon-btn" onclick="startEdit('${p.firestoreId}')" title="수정"><i class="ti ti-edit"></i></button>
+            <button class="icon-btn" onclick="deleteEntry('${p.firestoreId}')" title="삭제"><i class="ti ti-trash"></i></button>
           </div>
         </div>
         <div class="badges">
           <span class="badge badge-region">${p.region}</span>
           <span class="badge badge-cat">${p.cat}</span>
-          <span class="badge ${p.visit==='다녀왔어요'?'badge-visited':'badge-wish'}">${p.visit}</span>
-          ${p.fav?`<span class="badge badge-fav">⭐ 찐맛집</span>`:''}
+          <span class="badge ${p.visit === '다녀왔어요' ? 'badge-visited' : 'badge-wish'}">${p.visit}</span>
+          ${p.fav ? `<span class="badge badge-fav">⭐ 찐맛집</span>` : ''}
         </div>
         <div class="stars">${starsHTML(p.stars)}</div>
-        ${p.note?`<div class="card-note">${p.note}</div>`:''}
-        ${p.link?`<div class="card-link"><a href="${p.link}" target="_blank"><i class="ti ti-external-link"></i> 링크 보기</a></div>`:''}
+        ${p.note ? `<div class="card-note">${p.note}</div>` : ''}
+        ${p.link ? `<div class="card-link"><a href="${p.link}" target="_blank"><i class="ti ti-external-link"></i> 링크 보기</a></div>` : ''}
       </div>
     </div>
   `).join('');
 }
 
-function toggleFav(id){places=places.map(p=>p.id===id?{...p,fav:!p.fav}:p);persist();render()}
-function toggleVisit(id){places=places.map(p=>p.id===id?{...p,visit:p.visit==='다녀왔어요'?'가고 싶어요':'다녀왔어요'}:p);persist();render()}
-
-function previewImg(){
-  const url=document.getElementById('fImg').value.trim();
-  const prev=document.getElementById('imgPreview');
-  if(url){prev.src=url;prev.style.display='block';}else{prev.style.display='none';}
+async function toggleFav(firestoreId, currentFav) {
+  await updateDoc(doc(db, "places", firestoreId), { fav: !currentFav });
 }
 
-function openModal(){
-  editId=null;
-  document.getElementById('modalTitle').textContent='맛집 추가';
-  ['fName','fNote','fLink','fImg'].forEach(id=>document.getElementById(id).value='');
-  document.getElementById('fRegion').value='';
-  document.getElementById('fCat').value='';
-  document.getElementById('fStars').value='3';
-  document.getElementById('fVisit').value='가고 싶어요';
-  document.getElementById('fFav').checked=false;
-  document.getElementById('imgPreview').style.display='none';
+async function toggleVisit(firestoreId, currentVisit) {
+  await updateDoc(doc(db, "places", firestoreId), {
+    visit: currentVisit === '다녀왔어요' ? '가고 싶어요' : '다녀왔어요'
+  });
+}
+
+function previewImg() {
+  const url = document.getElementById('fImg').value.trim();
+  const prev = document.getElementById('imgPreview');
+  if (url) { prev.src = url; prev.style.display = 'block'; }
+  else { prev.style.display = 'none'; }
+}
+
+function openModal() {
+  editId = null;
+  document.getElementById('modalTitle').textContent = '맛집 추가';
+  ['fName','fNote','fLink','fImg'].forEach(id => document.getElementById(id).value = '');
+  document.getElementById('fRegion').value = '';
+  document.getElementById('fCat').value = '';
+  document.getElementById('fStars').value = '3';
+  document.getElementById('fVisit').value = '가고 싶어요';
+  document.getElementById('fFav').checked = false;
+  document.getElementById('imgPreview').style.display = 'none';
   document.getElementById('modalOverlay').classList.add('open');
 }
 
-function startEdit(id){
-  const p=places.find(x=>x.id===id);
-  editId=id;
-  document.getElementById('modalTitle').textContent='맛집 수정';
-  document.getElementById('fName').value=p.name;
-  document.getElementById('fRegion').value=p.region;
-  document.getElementById('fCat').value=p.cat;
-  document.getElementById('fStars').value=p.stars;
-  document.getElementById('fVisit').value=p.visit;
-  document.getElementById('fFav').checked=!!p.fav;
-  document.getElementById('fNote').value=p.note||'';
-  document.getElementById('fLink').value=p.link||'';
-  document.getElementById('fImg').value=p.img||'';
-  const prev=document.getElementById('imgPreview');
-  if(p.img){prev.src=p.img;prev.style.display='block';}else{prev.style.display='none';}
+function startEdit(firestoreId) {
+  const p = places.find(x => x.firestoreId === firestoreId);
+  editId = firestoreId;
+  document.getElementById('modalTitle').textContent = '맛집 수정';
+  document.getElementById('fName').value = p.name;
+  document.getElementById('fRegion').value = p.region;
+  document.getElementById('fCat').value = p.cat;
+  document.getElementById('fStars').value = p.stars;
+  document.getElementById('fVisit').value = p.visit;
+  document.getElementById('fFav').checked = !!p.fav;
+  document.getElementById('fNote').value = p.note || '';
+  document.getElementById('fLink').value = p.link || '';
+  document.getElementById('fImg').value = p.img || '';
+  const prev = document.getElementById('imgPreview');
+  if (p.img) { prev.src = p.img; prev.style.display = 'block'; } else { prev.style.display = 'none'; }
   document.getElementById('modalOverlay').classList.add('open');
 }
 
-function closeModal(){document.getElementById('modalOverlay').classList.remove('open')}
-function overlayClick(e){if(e.target===document.getElementById('modalOverlay'))closeModal()}
+function closeModal() { document.getElementById('modalOverlay').classList.remove('open'); }
+function overlayClick(e) { if (e.target === document.getElementById('modalOverlay')) closeModal(); }
 
-function saveEntry(){
-  const name=document.getElementById('fName').value.trim();
-  const region=document.getElementById('fRegion').value;
-  const cat=document.getElementById('fCat').value;
-  if(!name||!region||!cat){alert('이름, 지역, 종류는 필수예요!');return;}
-  const entry={
-    id:editId||nextId++,name,region,cat,
-    stars:parseInt(document.getElementById('fStars').value),
-    visit:document.getElementById('fVisit').value,
-    fav:document.getElementById('fFav').checked,
-    note:document.getElementById('fNote').value.trim(),
-    link:document.getElementById('fLink').value.trim(),
-    img:document.getElementById('fImg').value.trim()
+async function saveEntry() {
+  const name = document.getElementById('fName').value.trim();
+  const region = document.getElementById('fRegion').value;
+  const cat = document.getElementById('fCat').value;
+  if (!name || !region || !cat) { alert('이름, 지역, 종류는 필수예요!'); return; }
+  const entry = {
+    name, region, cat,
+    stars: parseInt(document.getElementById('fStars').value),
+    visit: document.getElementById('fVisit').value,
+    fav: document.getElementById('fFav').checked,
+    note: document.getElementById('fNote').value.trim(),
+    link: document.getElementById('fLink').value.trim(),
+    img: document.getElementById('fImg').value.trim(),
+    updatedAt: Date.now()
   };
-  if(editId)places=places.map(p=>p.id===editId?entry:p);
-  else places.push(entry);
-  closeModal();persist();render();
+  try {
+    if (editId) {
+      await updateDoc(doc(db, "places", editId), entry);
+      showToast('수정됐어요!');
+    } else {
+      await addDoc(colRef, { ...entry, createdAt: Date.now() });
+      showToast('추가됐어요!');
+    }
+    closeModal();
+  } catch(e) {
+    showToast('저장 실패 😢 다시 시도해봐!', 'error');
+  }
 }
 
-function deleteEntry(id){
-  if(!confirm('이 맛집을 삭제할까요?'))return;
-  places=places.filter(p=>p.id!==id);
-  persist();render();
+async function deleteEntry(firestoreId) {
+  if (!confirm('이 맛집을 삭제할까요?')) return;
+  try {
+    await deleteDoc(doc(db, "places", firestoreId));
+    showToast('삭제됐어요!');
+  } catch(e) {
+    showToast('삭제 실패 😢', 'error');
+  }
 }
-
-load();
 </script>
 </body>
 </html>
